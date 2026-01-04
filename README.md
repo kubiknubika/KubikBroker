@@ -33,4 +33,4 @@
 4.  **View:** http://localhost:8080/visualizer.html
 
 ---
-**Developed by KubikNubika** — *Zero to Hero Challenge (Project #6)*
+**Developed by KubikNubika**
