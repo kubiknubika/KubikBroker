@@ -1,0 +1,3 @@
+/workspaces/KubikBroker/src/CMakeFiles/KubikBroker.dir
+/workspaces/KubikBroker/src/CMakeFiles/edit_cache.dir
+/workspaces/KubikBroker/src/CMakeFiles/rebuild_cache.dir
