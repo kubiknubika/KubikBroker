@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>KubikBroker Ultimate</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', monospace; 
+            margin: 0; padding: 10px; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+        }
+        .header { 
+            height: 50px; display: flex; justify-content: space-between; align-items: center;
+            background: #161b22; border-bottom: 1px solid #30363d; border-radius: 6px; margin-bottom: 10px; padding: 0 20px;
+        }
+        .stat-val { font-size: 1.2em; font-weight: bold; margin-left: 5px; }
+        .gold { color: #e3b341; } .white { color: #fff; } .green { color: #3fb950; }
+
+        .control-group { display: flex; align-items: center; gap: 5px; margin-left: 20px; }
+        .control-label { font-size: 0.8em; color: #8b949e; margin-right: 5px; }
+        
+        button {
+            background: #21262d; border: 1px solid #30363d; color: #8b949e; 
+            padding: 4px 10px; cursor: pointer; border-radius: 4px; font-family: monospace; font-size: 0.9em;
+        }
+        button:hover { background: #30363d; color: #fff; }
+        button.active { background: #1f6feb; color: white; border-color: #1f6feb; }
+
+        .charts { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+        .card { 
+            flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 8px; 
+            padding: 10px; position: relative; min-height: 0;
+        }
+        h3 { margin: 0 0 5px 0; font-size: 0.8em; color: #8b949e; letter-spacing: 1px; }
+        .canvas-container { height: 90%; width: 100%; position: relative; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div style="display:flex; gap:15px;">
+            <div>PRICE: <span id="price" class="stat-val white">---</span></div>
+            <div>SPREAD: <span id="spread-val" class="stat-val green">---</span></div>
+            <div>PROFIT: <span id="profit" class="stat-val gold">---</span></div>
+        </div>
+        
+        <div style="display:flex;">
+            <div class="control-group">
+                <span class="control-label">ZOOM:</span>
+                <button onclick="setZoom(50, this)" class="active">Live</button>
+                <button onclick="setZoom(600, this)">1m</button>
+                <button onclick="setZoom(3000, this)">5m</button>
+            </div>
+            <div class="control-group">
+                <span class="control-label">SPEED:</span>
+                <button onclick="setSpeed(100, this)" class="active">Fast</button>
+                <button onclick="setSpeed(1000, this)">Slow</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="charts">
+        <div class="card">
+            <h3>MARKET DEPTH (LOB)</h3>
+            <div class="canvas-container"><canvas id="lobChart"></canvas></div>
+        </div>
+        <div class="card">
+            <h3>HISTORY & PnL</h3>
+            <div class="canvas-container"><canvas id="historyChart"></canvas></div>
+        </div>
+    </div>
+
+    <script>
+        Chart.defaults.color = '#484f58';
+        Chart.defaults.borderColor = '#30363d';
+
+        // --- CHARTS INIT ---
+        const lobChart = new Chart(document.getElementById('lobChart').getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: Array.from({length: 41}, (_, i) => i - 20),
+                datasets: [
+                    { label: 'Bids', data: [], backgroundColor: '#3fb950', barPercentage: 1.0, categoryPercentage: 1.0 },
+                    { label: 'Asks', data: [], backgroundColor: '#f85149', barPercentage: 1.0, categoryPercentage: 1.0 }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                scales: { x: { stacked: true }, y: { display: false } },
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        const historyChart = new Chart(document.getElementById('historyChart').getContext('2d'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Price', data: [], borderColor: '#fff', borderWidth: 2, pointRadius: 0, yAxisID: 'y_price' },
+                    { label: 'Profit', data: [], borderColor: '#e3b341', backgroundColor: 'rgba(227, 179, 65, 0.1)', borderWidth: 0, pointRadius: 0, fill: true, yAxisID: 'y_profit' }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false, animation: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: { display: false },
+                    y_price: { type: 'linear', position: 'left', grace: '50%' },
+                    y_profit: { type: 'linear', position: 'right', beginAtZero: true, grid: { display: false }, grace: '10%' }
+                },
+                plugins: { legend: { display: true } }
+            }
+        });
+
+        // --- STATE ---
+        let currentZoom = 50;
+        let updateInterval = 100;
+        let intervalId = null;
+
+        // --- CONTROLS ---
+        function setZoom(points, btn) {
+            currentZoom = points;
+            // Сброс класса active только у соседей
+            btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            renderLoop(); // Принудительный апдейт
+        }
+
+        function setSpeed(ms, btn) {
+            updateInterval = ms;
+            btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            clearInterval(intervalId);
+            intervalId = setInterval(renderLoop, updateInterval);
+        }
+
+        // --- LOOP ---
+        async function renderLoop() {
+            try {
+                const res = await fetch('book_snapshot.json?t=' + Date.now());
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!data.stats || !data.history) return; 
+
+                // HEADER
+                document.getElementById('price').innerText = data.stats.price;
+                document.getElementById('profit').innerText = "$" + data.stats.profit.toFixed(0);
+
+                // LOB UPDATE
+                const bidMap = new Map(data.bids.map(x => [x[0], x[1]]));
+                const askMap = new Map(data.asks.map(x => [x[0], x[1]]));
+                const bestBid = data.bids.length > 0 ? data.bids[0][0] : data.stats.price;
+                const bestAsk = data.asks.length > 0 ? data.asks[0][0] : data.stats.price;
+                document.getElementById('spread-val').innerText = (bestAsk - bestBid);
+
+                const bids = [], asks = [];
+                for (let i = -20; i <= 20; i++) {
+                    const p = data.stats.price + i;
+                    bids.push(bidMap.get(p) || 0);
+                    asks.push(askMap.get(p) || 0);
+                }
+                lobChart.data.datasets[0].data = bids;
+                lobChart.data.datasets[1].data = asks;
+                lobChart.update();
+
+                // HISTORY UPDATE (Slicing)
+                // Берем последние N точек из истории сервера
+                const totalPoints = data.history.length;
+                const startIdx = Math.max(0, totalPoints - currentZoom);
+                
+                // Чтобы не вешать браузер на режиме 5m, делаем даунсэмплинг (берем каждую 5-ю точку)
+                // Если точек > 500
+                const slice = data.history.slice(startIdx);
+                const step = Math.ceil(slice.length / 500); 
+                
+                const prices = [];
+                const profits = [];
+                const labels = [];
+
+                for (let i = 0; i < slice.length; i += step) {
+                    prices.push(slice[i][0]);
+                    profits.push(slice[i][1]);
+                    labels.push("");
+                }
+
+                historyChart.data.labels = labels;
+                historyChart.data.datasets[0].data = prices;
+                historyChart.data.datasets[1].data = profits;
+                historyChart.update();
+
+            } catch (e) { }
+        }
+
+        intervalId = setInterval(renderLoop, updateInterval);
+    </script>
+</body>
+</html>
